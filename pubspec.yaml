@@ -1,0 +1,23 @@
+name: ios_voice_call
+description: iOS仿拨号Zego语音通话，A/B端控制提示音
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  zego_express_engine: ^3.14.0
+  audioplayers: ^5.2.1
+  provider: ^6.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/sound/
