@@ -1,111 +1,132 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:zego_express_engine/zego_express_engine.dart';
+import 'service/zego_room_service.dart';
 
-class ZegoRoomService {
-  static final ZegoRoomService instance = ZegoRoomService._internal();
-  ZegoRoomService._internal();
+void main() {
+  runApp(const MyApp());
+}
 
-  ZegoExpressEngine? _engine;
-  final ValueNotifier<List<String>> remoteStreamIdList = ValueNotifier([]);
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
-  Future<void> initEngine() async {
-    if (_engine != null) return;
-
-    // ✅ 新版SDK正确构造：appID, scenario 为位置参数，appSign是命名参数
-    final ZegoEngineProfile profile = ZegoEngineProfile(
-      491443522,
-      ZegoScenario.Default,
-      appSign: "f141828e865741eb46cccf86fb4667b5d808e4e02be0f214dcdcfbe622db4204",
-      enablePlatformView: false,
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Zego Voice Demo',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: const RoomPage(),
     );
-    await ZegoExpressEngine.createEngineWithProfile(profile);
-    _engine = ZegoExpressEngine.instance;
+  }
+}
 
-    ZegoExpressEngine.onRoomStreamUpdate = (
-      String roomID,
-      ZegoUpdateType updateType,
-      List<ZegoStream> streamList,
-      Map<String, dynamic> extendedData,
-    ) {
-      final List<String> newList = [...remoteStreamIdList.value];
-      for (final stream in streamList) {
-        if (updateType == ZegoUpdateType.Add) {
-          if (!newList.contains(stream.streamID)) {
-            newList.add(stream.streamID);
-            startPlayStream(stream.streamID);
-          }
-        } else {
-          newList.remove(stream.streamID);
-          ZegoExpressEngine.instance.stopPlayingStream(stream.streamID);
-        }
-      }
-      remoteStreamIdList.value = newList;
-    };
+class RoomPage extends StatefulWidget {
+  const RoomPage({super.key});
 
-    ZegoExpressEngine.onIMRecvCustomCommand = (
-      String roomID,
-      ZegoUser fromUser,
-      String command,
-    ) {
-      debugPrint('收到信令 user:${fromUser.userID}, cmd=$command');
-    };
+  @override
+  State<RoomPage> createState() => _RoomPageState();
+}
 
-    ZegoExpressEngine.onRoomStateUpdate = (
-      String roomID,
-      ZegoRoomState state,
-      int errorCode,
-      Map<String, dynamic> extendedData,
-    ) {
-      debugPrint('房间状态 room:$roomID state:$state err:$errorCode');
-    };
+class _RoomPageState extends State<RoomPage> {
+  final ZegoRoomService _roomService = ZegoRoomService.instance;
+  final TextEditingController _roomIdCtrl = TextEditingController(text: "room001");
+  final TextEditingController _userIdCtrl = TextEditingController(text: "user001");
+  final TextEditingController _userNameCtrl = TextEditingController(text: "user001");
+  bool _inRoom = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _roomService.initEngine();
   }
 
-  Future<Widget?> startPlayStream(String streamID) async {
-    return ZegoExpressEngine.instance.createCanvasView((viewID) {
-      final canvas = ZegoCanvas.view(viewID);
-      ZegoExpressEngine.instance.startPlayingStream(streamID, canvas: canvas);
+  Future<void> _joinRoom() async {
+    final roomId = _roomIdCtrl.text.trim();
+    final userId = _userIdCtrl.text.trim();
+    final userName = _userNameCtrl.text.trim();
+    if (roomId.isEmpty || userId.isEmpty) return;
+
+    await _roomService.loginRoom(roomId, ZegoUser(userId, userName));
+    setState(() {
+      _inRoom = true;
     });
   }
 
-  Future<void> loginRoom(String roomID, ZegoUser user) async {
-    final config = ZegoRoomConfig.defaultConfig()..isUserStatusNotify = true;
-    await ZegoExpressEngine.instance.loginRoom(roomID, user, config: config);
+  Future<void> _leaveRoom() async {
+    await _roomService.logoutRoom();
+    setState(() {
+      _inRoom = false;
+    });
   }
 
-  Future<void> logoutRoom() async {
-    await ZegoExpressEngine.instance.logoutRoom();
-    remoteStreamIdList.value = [];
+  Future<void> _startPublish() async {
+    await _roomService.startPublish("stream_${_userIdCtrl.text}");
   }
 
-  Future<void> startPublish(String streamID) async {
-    await ZegoExpressEngine.instance.startPreview();
-    await ZegoExpressEngine.instance.startPublishingStream(streamID);
+  Future<void> _stopPublish() async {
+    await _roomService.stopPublish();
   }
 
-  Future<void> stopPublish() async {
-    await ZegoExpressEngine.instance.stopPreview();
-    await ZegoExpressEngine.instance.stopPublishingStream();
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Zego 语音房间")),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            TextField(
+              controller: _roomIdCtrl,
+              decoration: const InputDecoration(labelText: "RoomID"),
+              enabled: !_inRoom,
+            ),
+            TextField(
+              controller: _userIdCtrl,
+              decoration: const InputDecoration(labelText: "UserID"),
+              enabled: !_inRoom,
+            ),
+            TextField(
+              controller: _userNameCtrl,
+              decoration: const InputDecoration(labelText: "UserName"),
+              enabled: !_inRoom,
+            ),
+            const SizedBox(height: 16),
+            if (!_inRoom)
+              ElevatedButton(onPressed: _joinRoom, child: const Text("加入房间"))
+            else
+              Column(
+                children: [
+                  ElevatedButton(onPressed: _leaveRoom, child: const Text("退出房间")),
+                  ElevatedButton(onPressed: _startPublish, child: const Text("开始推流")),
+                  ElevatedButton(onPressed: _stopPublish, child: const Text("停止推流")),
+                  ValueListenableBuilder<List<String>>(
+                    valueListenable: _roomService.remoteStreamIdList,
+                    builder: (ctx, streams, child) {
+                      return Column(
+                        children: streams.map((sid) {
+                          return FutureBuilder<Widget?>(
+                            future: _roomService.startPlayStream(sid),
+                            builder: (context, snapshot) {
+                              if (snapshot.hasData && snapshot.data != null) {
+                                return SizedBox(height: 200, child: snapshot.data!);
+                              }
+                              return Text("等待播放 $sid");
+                            },
+                          );
+                        }).toList(),
+                      );
+                    },
+                  )
+                ],
+              )
+          ],
+        ),
+      ),
+    );
   }
 
-  Future<void> sendCustomCommand(
-    String roomID,
-    String command,
-    List<ZegoUser> targetUsers,
-  ) async {
-    final ZegoIMSendCustomCommandResult res =
-        await ZegoExpressEngine.instance.sendCustomCommand(roomID, command, targetUsers);
-    if (res.errorCode != 0) {
-      debugPrint('发送信令失败 code:${res.errorCode}');
-    }
-  }
-
-  Future<void> destroy() async {
-    ZegoExpressEngine.onRoomStreamUpdate = null;
-    ZegoExpressEngine.onIMRecvCustomCommand = null;
-    ZegoExpressEngine.onRoomStateUpdate = null;
-    remoteStreamIdList.value = [];
-    await ZegoExpressEngine.destroyEngine();
-    _engine = null;
+  @override
+  void dispose() {
+    _roomService.destroy();
+    super.dispose();
   }
 }
