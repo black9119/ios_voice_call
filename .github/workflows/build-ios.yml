@@ -6,19 +6,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Setup Flutter 3.32.0（最后支持iOS12的稳定版）
         uses: subosito/flutter-action@v2
         with:
-          # 只写 channel，删掉 flutter-version: stable！！
+          flutter-version: '3.32.0'
           channel: stable
-          # 固定架构为 x64，绕开arm64包缺失问题（macOS可以跑x64 Flutter）
           architecture: x64
 
-      - name: Install dependencies
+      - name: Flutter clean
+        run: flutter clean
+
+      - name: Pub get
         run: flutter pub get
 
-      - name: Pod install
-        run: cd ios && pod install
+      - name: Pod 清理+安装
+        run: |
+          cd ios
+          rm -rf Pods Podfile.lock
+          pod install
 
       - name: Build IPA ad-hoc
         run: flutter build ipa --export-method ad-hoc
