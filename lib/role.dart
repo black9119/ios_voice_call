@@ -1,0 +1,4 @@
+enum CallRole {
+  a,
+  b,
+}
