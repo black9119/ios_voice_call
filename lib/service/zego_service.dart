@@ -1,94 +1,127 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/widgets.dart';
 import 'package:zego_express_engine/zego_express_engine.dart';
 
-enum RoleType { a, b }
+// 角色枚举
+enum RoleType {
+  a, // A端接收方
+  b, // B端控制方
+}
 
-class ZegoService extends ChangeNotifier {
-  // ========== 【这里一定要替换成你自己ZEGO后台的信息】 ==========
-  static const int appID = 491443522;
-  static const String appSign = "f141828e865741eb46cccf86fb4667b5d808e4e02be0f214dcdcfbe622db4204";
-  // ==========================================================
+class ZegoRoomService extends ChangeNotifier {
+  static final ZegoRoomService instance = ZegoRoomService._internal();
+  ZegoRoomService._internal();
+
+  ZegoExpressEngine? _engine;
+  final ValueNotifier<List<String>> remoteStreamIdList = ValueNotifier([]);
 
   RoleType role = RoleType.a;
-  String? localUserID;
-  String? roomID;
-  bool isInRoom = false;
-
-  final AudioPlayer busyPlayer = AudioPlayer();
-  final AudioPlayer emptyPlayer = AudioPlayer();
-
-  ZegoService() {
-    initSDK();
-  }
 
   void setRole(RoleType r) {
     role = r;
     notifyListeners();
   }
 
-  Future<void> initSDK() async {
-    if(kIsWeb) return;
-    await ZegoExpressEngine.createEngine(appID, appSign, true, ZegoScenario.General);
-    ZegoExpressEngine.onRoomStreamUpdate = _onRoomStreamUpdate;
-    ZegoExpressEngine.onRecvCustomCommand = _onRecvCustomCommand;
-  }
+  Future<void> initEngine() async {
+    if (_engine != null) return;
 
-  // 收到B端下发指令
-  Future<void> _onRecvCustomCommand(String roomID, String fromUserID, String command) async {
-    debugPrint("收到指令：$command");
-    if(role != RoleType.a) return;
-    if(command == "busy"){
-      await busyPlayer.play(AssetSource("sound/busy.mp3"));
-    }else if(command == "empty"){
-      await emptyPlayer.play(AssetSource("sound/empty_number.mp3"));
-    }
-  }
+    final ZegoEngineProfile profile = ZegoEngineProfile(
+      491443522,
+      ZegoScenario.StandardVoiceCall,
+      appSign: "f141828e865741eb46cccf86fb4667b5d808e4e02be0f214dcdcfbe622db4204",
+      enablePlatformView: false,
+    );
+    await ZegoExpressEngine.createEngineWithProfile(profile);
+    _engine = ZegoExpressEngine.instance;
 
-  void _onRoomStreamUpdate(String roomID, ZegoUpdateType updateType, List<ZegoStream> streamList, Map<String, dynamic> extendedData) {
-    if(updateType == ZegoUpdateType.Add){
-      for(var s in streamList){
-        ZegoExpressEngine.instance().startPlayingStream(s.streamID);
+    await ZegoExpressEngine.instance.enableCamera(false);
+
+    ZegoExpressEngine.onRoomStreamUpdate = (
+      String roomID,
+      ZegoUpdateType updateType,
+      List<ZegoStream> streamList,
+      Map<String, dynamic> extendedData,
+    ) {
+      final List<String> newList = [...remoteStreamIdList.value];
+      for (final stream in streamList) {
+        if (updateType == ZegoUpdateType.Add) {
+          if (!newList.contains(stream.streamID)) {
+            newList.add(stream.streamID);
+            ZegoExpressEngine.instance.startPlayingStream(stream.streamID);
+          }
+        } else {
+          newList.remove(stream.streamID);
+          ZegoExpressEngine.instance.stopPlayingStream(stream.streamID);
+        }
       }
+      remoteStreamIdList.value = newList;
+    };
+
+    ZegoExpressEngine.onIMRecvCustomCommand = (
+      String roomID,
+      ZegoUser fromUser,
+      String command,
+    ) {
+      debugPrint('收到信令 user:${fromUser.userID}, cmd=$command');
+    };
+
+    ZegoExpressEngine.onRoomStateUpdate = (
+      String roomID,
+      ZegoRoomState state,
+      int errorCode,
+      Map<String, dynamic> extendedData,
+    ) {
+      debugPrint('房间状态 room:$roomID state:$state err:$errorCode');
+    };
+  }
+
+  Future<void> loginRoom(String roomID, ZegoUser user) async {
+    final config = ZegoRoomConfig.defaultConfig()..isUserStatusNotify = true;
+    await ZegoExpressEngine.instance.loginRoom(roomID, user, config: config);
+  }
+
+  Future<void> logoutRoom() async {
+    await ZegoExpressEngine.instance.logoutRoom();
+    remoteStreamIdList.value = [];
+  }
+
+  Future<void> startPublish(String streamID) async {
+    await ZegoExpressEngine.instance.startPublishingStream(streamID);
+  }
+
+  Future<void> stopPublish() async {
+    await ZegoExpressEngine.instance.stopPublishingStream();
+  }
+
+  Future<void> sendCustomCommand(
+    String roomID,
+    String command,
+    List<ZegoUser> targetUsers,
+  ) async {
+    final ZegoIMSendCustomCommandResult res =
+        await ZegoExpressEngine.instance.sendCustomCommand(roomID, command, targetUsers);
+    if (res.errorCode != 0) {
+      debugPrint('发送信令失败 code:${res.errorCode}');
     }
   }
 
-  Future<void> startCall({required String remoteUserID}) async {
-    localUserID = DateTime.now().millisecondsSinceEpoch.toString();
-    roomID = "room_$remoteUserID";
-
-    await ZegoExpressEngine.instance().loginRoom(roomID!, ZegoUser(localUserID!, localUserID));
-    await ZegoExpressEngine.instance().startPublishingStream(localUserID!);
-    await ZegoExpressEngine.instance().startAudioCapture();
-    await ZegoExpressEngine.instance().setAudioRouteToSpeaker(true);
-    isInRoom = true;
-    notifyListeners();
+  Future<void> destroy() async {
+    ZegoExpressEngine.onRoomStreamUpdate = null;
+    ZegoExpressEngine.onIMRecvCustomCommand = null;
+    ZegoExpressEngine.onRoomStateUpdate = null;
+    remoteStreamIdList.value = [];
+    await ZegoExpressEngine.destroyEngine();
+    _engine = null;
   }
 
-  // B端发送自定义指令
-  Future<void> sendCommand(String cmd) async {
-    if(!isInRoom || role != RoleType.b) return;
-    await ZegoExpressEngine.instance().sendCustomCommand(roomID!, cmd);
-  }
+  // 麦克风静音（通话中静音，推荐这个）
+Future<void> enableMic(bool mute) async {
+  await ZegoExpressEngine.instance.muteMicrophone(mute);
+}
 
-  // 变声接口：简单示例，你可以在UI再加按钮调用
-  Future<void> setVoiceChange(ZegoVoiceChangerType type) async {
-    await ZegoExpressEngine.instance().setVoiceChangerType(type);
-  }
+// 听筒 / 扬声器切换
+Future<void> enableSpeaker(bool toSpeaker) async {
+  await ZegoExpressEngine.instance.setAudioRouteToSpeaker(toSpeaker);
+}
 
-  Future<void> stopCall() async {
-    await ZegoExpressEngine.instance().stopPublishingStream();
-    await ZegoExpressEngine.instance().logoutRoom();
-    isInRoom = false;
-    notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    busyPlayer.dispose();
-    emptyPlayer.dispose();
-    ZegoExpressEngine.destroyEngine();
-    super.dispose();
-  }
 }
